@@ -1,5 +1,3 @@
-(declaim (hash-table *white-space-characters* *base-for-exp-marker-hash*))
-
 (define-condition invalid-number (parse-error)
   ((value :reader invalid-number-value
 	  :initarg :value
@@ -12,32 +10,30 @@
 		     (invalid-number-value c)
                      (invalid-number-reason c)))))
 
-(defparameter *white-space-characters*
-  (make-hash-table :test #'eql))
-(setf (gethash #\Space *white-space-characters*) T
-      (gethash #\Tab *white-space-characters*) T
-      (gethash #\Return *white-space-characters*) T
-      (gethash #\Linefeed *white-space-characters*) T)
-
-(defparameter *base-for-exp-marker-hash*
-  (make-hash-table :test #'eql))
-
-(setf (gethash #\d *white-space-characters*) 10.0d0
-      (gethash #\D *white-space-characters*) 10.0d0
-      (gethash #\f *white-space-characters*) 10.0f0
-      (gethash #\F *white-space-characters*) 10.0f0
-      (gethash #\s *white-space-characters*) 10.0s0
-      (gethash #\S *white-space-characters*) 10.0s0
-      (gethash #\l *white-space-characters*) 10.0l0
-      (gethash #\L *white-space-characters*) 10.0l0)
-
 (declaim (inline white-space-p))
 
-(defun white-space-p (x wsch)
+(defun white-space-p (char)
     (declare (optimize (speed 3) (safety 1))
-	     (type character x)
-	     (hash-table wsch))
-    (gethash x wsch)))
+	     (type character char))
+    (case char
+      ((#\Space #\Return #\Tab #\Linefeed)
+       T)))
+
+(declaim (inline base-for-exponent-marker))
+
+(defun base-for-exponent-marker (char)
+  (declare (optimize (speed 3) (safety 1)))
+  (case char
+    ((#\d #\D)
+     10.0d0)
+    ((#\e #\E)
+     (coerce 10 *read-default-float-format*))
+    ((#\f #\F)
+     10.0f0)
+    ((#\s #\S)
+     10.0s0)
+    ((#\l #\L)
+     10.0l0)))
 
 (defun parse-integer-and-places (string start end &key (radix 10))
   (declare (optimize (speed 3) (safety 1))
@@ -55,7 +51,7 @@
     ;; beforehand we count it here
     (let ((relevant-digits (- end-pos start
 			      (loop :for pos :from (- end-pos 1) :downto start
-				 :while (white-space-p (char string pos) *white-space-characters*)
+				 :while (white-space-p (char string pos))
 				 :count 1))))
       (declare (fixnum relevant-digits))
       (cons integer relevant-digits))))
@@ -178,18 +174,6 @@
 				     :end end
 				     :radix radix)))))
 
-(defun base-for-exponent-marker (char)
-  (case char
-    ((#\d #\D)
-     10.0d0)
-    ((#\e #\E)
-     (coerce 10 *read-default-float-format*))
-    ((#\f #\F)
-     10.0f0)
-    ((#\s #\S)
-     10.0s0)
-    ((#\l #\L)
-     10.0l0)))
 
 (defun make-float/frac (radix exp-marker whole-place frac-place exp-place)
   (let* ((base (base-for-exponent-marker exp-marker))
