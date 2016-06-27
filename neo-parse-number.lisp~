@@ -82,102 +82,61 @@
 (defun places (x) (cdr x))
 
 (defun parse-number (string &key (start 0) (end (length string)) (radix 10)
-			      ((:float-format *read-default-float-format*)
-			       *read-default-float-format*))
+                                 ((:float-format *read-default-float-format*)
+                                  *read-default-float-format*))
   "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec."
   (flet ((invalid-number (reason)
 	   (error 'invalid-number
 		  :value (subseq string start end)
 		  :reason reason)))
-    ;; Checking to see if the string starts with the #c signifier for complex numbers
-    (if (and (eql (char string start) #\#)
-	     (member (char string (1+ start)) '(#\C #\c)))
-	;; Complex number check - if it is looking like a complex number
-	;; set local variables indicating the position of the starting
-	;; and ending parentheses
-	(let ((\(-pos (position #\( string :start start :end end))
-	      (\)-pos (position #\) string :start start :end end)))
-	  ;; Complex number stuff - checking for mismatched parentheses
-	  ;; and throwing an error if they're found to be such
-	  (when (or (not \(-pos)
-		    (not \)-pos)
-		    (position #\( string :start (1+ \(-pos) :end end)
-		    (position #\) string :start (1+ \)-pos) :end end))
-	    (invalid-number "Mismatched/missing parenthesis"))
-	  ;; Complex number stuff - get the position of the first number
-	  ;; being the position of the first non-white-space character
-	  ;; in the string, after the opening paren's position.
-	  (let ((real-pos (position-if-not #'white-space-p string
-					   :start (1+ \(-pos) :end \)-pos)))
-	    ;; Complex number stuff - if the first number, that is to say
-	    ;; the real part of the complex number, cannot be found,
-	    ;; return an error saying there is a missing real part.
-	    (unless real-pos
-	      (invalid-number "Missing real part"))
-	    ;; Complex number stuff - if the first part of the complex
-	    ;; number has been found, then we go looking for the white
-	    ;; space that delimits the real and imaginary part
-	    (let ((delimiting-space (position-if #'white-space-p string
-						 :start (1+ real-pos)
-						 :end \)-pos)))
-	      ;; and if we can't find it, we say there's no imaginary part
-	      (unless delimiting-space
-		(invalid-number "Missing imaginary part"))
-	      ;; Complex number stuff - Then we get the position of the
-	      ;; imaginary part, which is the first position of non-whitespace
-	      ;; characters AFTER the original intermediary white space has been
-	      ;; found, understanding that it must have been found, because
-	      ;; we would have thrown an error if it hadn't by this point.
-	      (let ((img-pos (position-if-not #'white-space-p string
-					      :start (1+ delimiting-space)
-					      :end \)-pos)))
-		;; If the imaginary part is not found, throw an error
-		(unless img-pos
+      (if (and (eql (char string start) #\#)
+	       (member (char string (1+ start)) '(#\C #\c)))
+	  (let ((\(-pos (position #\( string :start start :end end))
+		(\)-pos (position #\) string :start start :end end)))
+	    (when (or (not \(-pos)
+		      (not \)-pos)
+		      (position #\( string :start (1+ \(-pos) :end end)
+		      (position #\) string :start (1+ \)-pos) :end end))
+	      (invalid-number "Mismatched/missing parenthesis"))
+	    (let ((real-pos (position-if-not #'white-space-p string
+					     :start (1+ \(-pos) :end \)-pos)))
+	      (unless real-pos
+		(invalid-number "Missing real part"))
+	      (let ((delimiting-space (position-if #'white-space-p string
+						   :start (1+ real-pos)
+						   :end \)-pos)))
+		(unless delimiting-space
 		  (invalid-number "Missing imaginary part"))
-		;; Complex number stuff - get the end point of the imaginary
-		;; part, which is to say, searching between the imaginary number
-		;; and the point of the closing brackets for a complex number
-		;; We do this by searching for white space, but it might
-		;; be that we find no white space.  If this is the case,
-		;; its okay, because we will call the following complex function
-		;; with an or clause, so that if there is no end pos, we'll
-		;; simply read the imaginary part by reading up to the closing bracket
-		;; which is fed in as a parameter instead.
-		
-		(let ((img-end-pos (position-if #'white-space-p string
-						:start (1+ img-pos)
+		(let ((img-pos (position-if-not #'white-space-p string
+						:start (1+ delimiting-space)
 						:end \)-pos)))
-		  ;; And now call the complex function
-		  (complex (parse-real-number string
-					      :start real-pos
-					      :end delimiting-space
-					      :radix radix)
-			   (parse-real-number string
-					      :start img-pos
-					      :end (or img-end-pos
-						       \)-pos)
-					      :radix radix)))))))
-	;; If the number doesn't look like a complex number, parse it with
-	;; a call to parse-real-number and some parameters
-	(parse-real-number string :start start :end end :radix radix))))
+		  (unless img-pos
+		    (invalid-number "Missing imaginary part"))
+		  (let ((img-end-pos (position-if #'white-space-p string
+						  :start (1+ img-pos)
+						  :end \)-pos)))
+		    (complex (parse-real-number string
+						:start real-pos
+						:end delimiting-space
+						:radix radix)
+			     (parse-real-number string
+						:start img-pos
+						:end (or img-end-pos
+							 \)-pos)
+						:radix radix)))))))
+	  (parse-real-number string :start start :end end :radix radix))))
 
 (defun parse-real-number (string &key (start 0) (end nil) (radix 10)
-				   ((:float-format *read-default-float-format*)
-				    *read-default-float-format*))
+                                      ((:float-format *read-default-float-format*)
+                                       *read-default-float-format*))
   "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec -- except for complex numbers."
   (let ((end (or end (length string))))
-    ;; Real number parsing: Is the first character a minus sign
-    ;; If so, parse the positive number to the right of the minus
-    ;; sign and multiply the result by -1
     (case (char string start)
       ((#\-)
        (* -1 (parse-positive-real-number string
 					 :start (1+ start)
 					 :end end
 					 :radix radix)))
-      ;;Real number parsing: If the first character is a hash then we check for the other
-      ;; characters that signal different radixes, parsing the remainder of the string
-      ;; with the original parse-real-number-function recursively
       ((#\#)
        (case (char string (1+ start))
 	 ((#\x #\X)
@@ -195,11 +154,6 @@
 			     :start (+ start 2)
 			     :end end
 			     :radix 8))
-
-	 ;; If the first character was a hash, and there's numbers following it
-	 ;; then we need to check for the radix signifier, which is the #\r or #\R
-	 ;; character.  If we can't find it, then an error is signalled.
-	 ;; If we do find it, then we parse the real number of the remaining part
 	 (t (if (digit-char-p (char string (1+ start)))
 		(let ((r-pos (position #\r string
 				       :start (1+ start)
@@ -235,8 +189,8 @@
            (number-value exp-place))))
 
 (defun parse-positive-real-number (string &key (start 0) (end nil) (radix 10)
-					    ((:float-format *read-default-float-format*)
-					     *read-default-float-format*))
+                                               ((:float-format *read-default-float-format*)
+                                                *read-default-float-format*))
   "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec -- except for complex numbers and negative numbers."
   (let ((end (or end (length string)))
 	(first-char (char string start)))
