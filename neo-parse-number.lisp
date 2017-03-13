@@ -1,290 +1,312 @@
-(define-condition invalid-number (parse-error)
-  ((value :reader invalid-number-value
-	  :initarg :value
-	  :initform nil)
-   (reason :reader invalid-number-reason
-	   :initarg :reason
-	   :initform "Not specified"))
-  (:report (lambda (c s)
-	     (format s "Invalid number: ~S [Reason: ~A]"
-		     (invalid-number-value c)
-                     (invalid-number-reason c)))))
+(defparameter *default-float-format* 'double-float)
+(defparameter *radix* 10)
+(defparameter *default-value-on-error* nil)
 
-(declaim (inline white-space-p))
+(defun parse-int (string &optional (value-on-error *default-value-on-error*) (radix *radix*))
+  "Parse an integer from string"
+  (handler-case (parse-integer string :radix radix)
+    (error () value-on-error)))
 
-(defun white-space-p (char)
-    (declare (optimize (speed 3) (safety 1))
-	     (type character char))
-    (case char
-      ((#\Space #\Return #\Tab #\Linefeed)
-       T)))
+(defun parse-ratio (string &optional (value-on-error *default-value-on-error*))
+  "Parse a string as a fraction."
+  (handler-case 
+      (let ((divider-position (position #\/ string)))
+	(/ (parse-integer string :start 0 :end divider-position)
+	   (parse-integer string :start (+ divider-position 1))))
+    (error () value-on-error)))
 
-(declaim (inline base-for-exponent-marker))
+(defun parse-float (string &optional (value-on-error *default-value-on-error*))
+  "Parse a string as a float if we deem it reasonably possible to do so."
+  (handler-case 
+      (let ((string-length (length string)) ;length of string to terminate early if done
+	    (whole-part 0) ;stores the whole-number part of the float
+	    (whole-length 0) ;keeps track of how many digits are in the whole-number part
+	    (length-marker 0) ;keeps track of where we are in the string while parsing
+	    (fraction-part 0) ;keeps track of the fraction part of the float
+	    (fraction-length 0) ;keeps track of how many digits are in the fraction part
+	    (exponent-value 0) ;stores the exponent of the float
+	    (exponent-length 0) ;keeps track of how many digits are in the exponent
+	    (exponent-base 10.0d0) ;base
+	    (type-of-float 'DOUBLE-FLOAT)
+	    (coercion-coefficient 1.0d0))
+	
+	(declare (fixnum length-marker)
+		 (symbol type-of-float)
+		 (string string)
+		 (float exponent-base coercion-coefficient)
+		 (dynamic-extent string-length
+				 whole-part
+				 whole-length
+				 length-marker
+				 fraction-part
+				 fraction-length
+				 exponent-value
+				 exponent-length
+				 exponent-base
+				 coercion-coefficient))
 
-(defun base-for-exponent-marker (char)
-  (declare (optimize (speed 3) (safety 1)))
-  (case char
-    ((#\d #\D)
-     10.0d0)
-    ((#\e #\E)
-     (coerce 10 *read-default-float-format*))
-    ((#\f #\F)
-     10.0f0)
-    ((#\s #\S)
-     10.0s0)
-    ((#\l #\L)
-     10.0l0)))
+	;; First, we attempt to parse an integer from the left-most part of the string
+	;; storing the value and the length of the parsed integer in the respective
+	;; values and incrementing our place in the full string
+	;; This constitutes the whole part of the floating point number
 
-(defun parse-integer-and-places (string start end &key (radix 10))
-  (declare (optimize (speed 3) (safety 1))
-	   (type string string)
-	   (type fixnum start end radix))
-  (multiple-value-bind (integer end-pos)
-      (if (= start end)
-	  (values 0 0)
-	  (parse-integer string
-			 :start start
-			 :end end
-			 :radix radix))
-    ;; cl:parse-integer will consume trailing whitespace, thus end-pos may be
-    ;; larger than the number of digits. Instead of trimming whitespace
-    ;; beforehand we count it here
-    (let ((relevant-digits (- end-pos start
-			      (loop :for pos :from (- end-pos 1) :downto start
-				 :while (white-space-p (char string pos))
-				 :count 1))))
-      (declare (fixnum relevant-digits))
-      (cons integer relevant-digits))))
+	(multiple-value-setq (whole-part whole-length) (parse-integer string :junk-allowed t))
+	(incf length-marker whole-length) ;;increment relative position by length of first int
 
-(defun parse-integers (string start end splitting-points &key (radix 10))
-  (declare (optimize (speed 3) (safety 1))
-	   (type string string)
-	   (type fixnum start end radix))
-  (values-list (loop for left = start then (1+ right)
-		     for point in splitting-points
-		     for right = point
-		     collect (parse-integer-and-places string
-						       left
-						       right
-						       :radix radix)
-		     into integers
-		     finally (return
-			       (nconc integers
-				      (list
-				       (parse-integer-and-places string
-								 left
-								 end
-								 :radix radix
-								 )))))))
+	;; If our previous operation didn't parse the entire string in one go,
+	;; we increment our relative position in the string by 1 (within the subseq)
+	;; in order to avoid the period in a floating point representation
+	;; and parse a second integer from that point on.
+	;; This consistutes the fractional part of the floating point number
+	
+	(if (not (eql string-length length-marker))
+	    (progn
+	      (multiple-value-setq (fraction-part fraction-length)
+		(parse-integer (subseq string (incf length-marker)) :junk-allowed t))
+	      (incf length-marker fraction-length)))
 
-(declaim (inline number-value places))
-(defun number-value (x) (car x))
-(defun places (x) (cdr x))
+	;; If our previous operation didn't parse the entire string yet,
+	;; we now deal with identifying exponent markers
+	;; if none are present, or if the ambiguous
+	;; character of #\e or #\E is present, we use a default
+	;; value (by convention, a double float)
+	;; We coerce the other numbers we use in our final calculation
+	;; to the same type
+	
+	(if (not (eql length-marker string-length))
+	    (progn
+	      (setf coercion-coefficient (case (char string length-marker)
+					   ((#\d #\D) 1.0d0)
+					   ((#\e #\E) (coerce coercion-coefficient *default-float-format*))
+					   ((#\f #\F) 1.0f0)
+					   ((#\s #\S) 1.0s0)
+					   ((#\l #\L) 1.0l0)
+					   (t (coerce coercion-coefficient *default-float-format*)))
+		    
+		    type-of-float (type-of coercion-coefficient)
+		    
+		    exponent-base (coerce exponent-base (type-of coercion-coefficient)))
+	      
+	      (multiple-value-setq (exponent-value exponent-length) (parse-integer (subseq string (incf length-marker)) :junk-allowed t))
+	      (incf length-marker exponent-length)))
 
-(defun parse-number (string &key (start 0) (end (length string)) (radix 10)
-                                 ((:float-format *read-default-float-format*)
-                                  *read-default-float-format*))
-  "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec."
-  (flet ((invalid-number (reason)
-	   (error 'invalid-number
-		  :value (subseq string start end)
-		  :reason reason)))
-      (if (and (eql (char string start) #\#)
-	       (member (char string (1+ start)) '(#\C #\c)))
-	  (let ((\(-pos (position #\( string :start start :end end))
-		(\)-pos (position #\) string :start start :end end)))
-	    (when (or (not \(-pos)
-		      (not \)-pos)
-		      (position #\( string :start (1+ \(-pos) :end end)
-		      (position #\) string :start (1+ \)-pos) :end end))
-	      (invalid-number "Mismatched/missing parenthesis"))
-	    (let ((real-pos (position-if-not #'white-space-p string
-					     :start (1+ \(-pos) :end \)-pos)))
-	      (unless real-pos
-		(invalid-number "Missing real part"))
-	      (let ((delimiting-space (position-if #'white-space-p string
-						   :start (1+ real-pos)
-						   :end \)-pos)))
-		(unless delimiting-space
-		  (invalid-number "Missing imaginary part"))
-		(let ((img-pos (position-if-not #'white-space-p string
-						:start (1+ delimiting-space)
-						:end \)-pos)))
-		  (unless img-pos
-		    (invalid-number "Missing imaginary part"))
-		  (let ((img-end-pos (position-if #'white-space-p string
-						  :start (1+ img-pos)
-						  :end \)-pos)))
-		    (complex (parse-real-number string
-						:start real-pos
-						:end delimiting-space
-						:radix radix)
-			     (parse-real-number string
-						:start img-pos
-						:end (or img-end-pos
-							 \)-pos)
-						:radix radix)))))))
-	  (parse-real-number string :start start :end end :radix radix))))
+	;; Now we built up the final float
+	;; Note how we have to check whether it is a positive or negative float
+	;; because adding a positive fractional-part to negative whole-part
+	;; moves the representation in the wrong direction
 
-(defun parse-real-number (string &key (start 0) (end nil) (radix 10)
-                                      ((:float-format *read-default-float-format*)
-                                       *read-default-float-format*))
-  "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec -- except for complex numbers."
-  (let ((end (or end (length string))))
-    (case (char string start)
-      ((#\-)
-       (* -1 (parse-positive-real-number string
-					 :start (1+ start)
-					 :end end
-					 :radix radix)))
-      ((#\#)
-       (case (char string (1+ start))
-	 ((#\x #\X)
-	  (parse-real-number string
-			     :start (+ start 2)
-			     :end end
-			     :radix 16))
-	 ((#\b #\B)
-	  (parse-real-number string
-			     :start (+ start 2)
-			     :end end
-			     :radix 2))
-	 ((#\o #\O)
-	  (parse-real-number string
-			     :start (+ start 2)
-			     :end end
-			     :radix 8))
-	 (t (if (digit-char-p (char string (1+ start)))
-		(let ((r-pos (position #\r string
-				       :start (1+ start)
-				       :end end
-				       :key #'char-downcase)))
-		  (unless r-pos
-		    (error 'invalid-number
-			   :value (subseq string start end)
-			   :reason "Missing R in #radixR"))
-		  (parse-real-number string
-				     :start (1+ r-pos)
-				     :end end
-				     :radix (parse-integer string
-							   :start (1+ start)
-							   :end r-pos)))))))
-      (t (parse-positive-real-number string
-				     :start start
-				     :end end
-				     :radix radix)))))
+	(if (minusp whole-part)
+	    (* (- (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))
+	    (* (+ (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))))
+    (error () value-on-error)))    
+
+(defun parse-double! (string &optional (value-on-error *default-value-on-error*))
+  "Parse a string as a DOUBLE-FLOAT if we deem it reasonably possible to do so."
+  (handler-case 
+      (let ((string-length (length string)) ;length of string to terminate early if done
+	    (whole-part 0) ;stores the whole-number part of the float
+	    (whole-length 0) ;keeps track of how many digits are in the whole-number part
+	    (length-marker 0) ;keeps track of where we are in the string while parsing
+	    (fraction-part 0) ;keeps track of the fraction part of the float
+	    (fraction-length 0) ;keeps track of how many digits are in the fraction part
+	    (exponent-value 0) ;stores the exponent of the float
+	    (exponent-length 0) ;keeps track of how many digits are in the exponent
+	    (exponent-base 10.0d0) ;base
+	    (type-of-float 'DOUBLE-FLOAT)
+	    (coercion-coefficient 1.0d0))
+
+	(declare (fixnum string-length whole-part fraction-part length-marker whole-length fraction-length exponent-length)
+		 (type (signed-byte 32) fraction-length exponent-value)
+		 (symbol type-of-float)
+		 (simple-array string)
+		 (double-float exponent-base coercion-coefficient)
+		 (dynamic-extent string-length
+				 whole-part
+				 whole-length
+				 length-marker
+				 fraction-part
+				 fraction-length
+				 exponent-value
+				 exponent-length
+				 exponent-base
+				 coercion-coefficient))
+
+	;; First, we attempt to parse an integer from the left-most part of the string
+	;; storing the value and the length of the parsed integer in the respective
+	;; values and incrementing our place in the full string
+	;; This constitutes the whole part of the floating point number
+
+	(multiple-value-setq (whole-part whole-length) (parse-integer string :junk-allowed t))
+	(incf length-marker whole-length) ;;increment relative position by length of first int
+
+	;; If our previous operation didn't parse the entire string in one go,
+	;; we increment our relative position in the string by 1 (within the subseq)
+	;; in order to avoid the period in a floating point representation
+	;; and parse a second integer from that point on.
+	;; This consistutes the fractional part of the floating point number
+	
+	(if (not (eql string-length length-marker))
+	    (progn
+	      (multiple-value-setq (fraction-part fraction-length)
+		(parse-integer (subseq string (incf length-marker)) :junk-allowed t))
+	      (incf length-marker fraction-length)))
+
+	;; If our previous operation didn't parse the entire string yet,
+	;; we now deal with identifying exponent markers.
+	;; Because we are using parse-double, we won't check for exact
+	;; values, because we'll interpret everything liberally as an
+	;; exponent marker that really means a double float.
+	;; No numbers need to be coerced, because we already know what
+	;; type they will be.
+	
+	(if (not (eql length-marker string-length))
+	    (progn
+	      (multiple-value-setq (exponent-value exponent-length) (parse-integer (subseq string (incf length-marker))))
+	      (incf length-marker exponent-length)))
+
+	;; Now we built up the final float
+	;; Note how we have to check whether it is a positive or negative float
+	;; because adding a positive fractional-part to negative whole-part
+	;; moves the representation in the wrong direction
+
+	(if (minusp whole-part)
+	    (* (- (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))
+	    (* (+ (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))))
+	    (error () value-on-error)))
+
+(defun parse-single! (string &optional (value-on-error *default-value-on-error*))
+    (handler-case 
+      (let ((string-length (length string)) ;length of string to terminate early if done
+	    (whole-part 0) ;stores the whole-number part of the float
+	    (whole-length 0) ;keeps track of how many digits are in the whole-number part
+	    (length-marker 0) ;keeps track of where we are in the string while parsing
+	    (fraction-part 0) ;keeps track of the fraction part of the float
+	    (fraction-length 0) ;keeps track of how many digits are in the fraction part
+	    (exponent-value 0) ;stores the exponent of the float
+	    (exponent-length 0) ;keeps track of how many digits are in the exponent
+	    (exponent-base 10.0s0) ;base
+	    (type-of-float 'SINGLE-FLOAT)
+	    (coercion-coefficient 1.0s0))
+
+	(declare (fixnum string-length whole-part fraction-part length-marker whole-length fraction-length exponent-length)
+		 (type (signed-byte 32) fraction-length exponent-value)
+		 (symbol type-of-float)
+		 (simple-array string)
+		 (single-float exponent-base coercion-coefficient)
+		 (dynamic-extent string-length
+				 whole-part
+				 whole-length
+				 length-marker
+				 fraction-part
+				 fraction-length
+				 exponent-value
+				 exponent-length
+				 exponent-base
+				 coercion-coefficient))
+
+	;; First, we attempt to parse an integer from the left-most part of the string
+	;; storing the value and the length of the parsed integer in the respective
+	;; values and incrementing our place in the full string
+	;; This constitutes the whole part of the floating point number
+
+	(multiple-value-setq (whole-part whole-length) (parse-integer string :junk-allowed t))
+	(incf length-marker whole-length) ;;increment relative position by length of first int
+
+	;; If our previous operation didn't parse the entire string in one go,
+	;; we increment our relative position in the string by 1 (within the subseq)
+	;; in order to avoid the period in a floating point representation
+	;; and parse a second integer from that point on.
+	;; This consistutes the fractional part of the floating point number
+	
+	(if (not (eql string-length length-marker))
+	    (progn
+	      (multiple-value-setq (fraction-part fraction-length)
+		(parse-integer (subseq string (incf length-marker)) :junk-allowed t))
+	      (incf length-marker fraction-length)))
+
+	;; If our previous operation didn't parse the entire string yet,
+	;; we now deal with identifying exponent markers.
+	;; Because we are using parse-single, we won't check for exact
+	;; values, because we'll interpret everything liberally as an
+	;; exponent marker that really means a double float.
+	;; No numbers need to be coerced, because we already know what
+	;; type they will be.
+	
+	(if (not (eql length-marker string-length))
+	    (progn
+	      (multiple-value-setq (exponent-value exponent-length) (parse-integer (subseq string (incf length-marker))))
+	      (incf length-marker exponent-length)))
+
+	;; Now we built up the final float
+	;; Note how we have to check whether it is a positive or negative float
+	;; because adding a positive fractional-part to negative whole-part
+	;; moves the representation in the wrong direction
+
+	(if (minusp whole-part)
+	    (* (- (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))
+	    (* (+ (coerce whole-part type-of-float)
+		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
+	       (expt exponent-base exponent-value))))
+	    (error () value-on-error)))
+
+(defun parse-complex-num (string &optional (value-on-error *default-value-on-error*))
+  (handler-case (parse-number:parse-number string)
+    (error () value-on-error)))
+
+(defun parse-string (string &optional (value-on-error *default-value-on-error*))
+  "Return a deep copy of the input string"
+  (if (stringp string)
+      (let* ((string-length (length string))
+	     (new-string (make-array string-length :element-type 'character)))
+	(loop
+	   for i from 0 to string-length
+	   do (setf (schar new-string i) (aref string i)))
+	new-string)
+      value-on-error))
+  
+(defun parse-type-from-string (string)
+  "Obtain the most sensible type of number contained in a string"
+  (let ((string-num-type (type-of (handler-case (parse-number:parse-number string)
+				    (error () nil)))))
+    (cond ((eql #\. (char string (- (length string) 1))) 'STRING)
+	  ((and (equal (subseq string 0 2 
+	  ((eq string-num-type 'BIT) 'INTEGER)
+	  ((eq string-num-type 'FIXNUM) 'INTEGER)
+	  ((and (listp string-num-type)
+		(eq (car string-num-type) 'INTEGER)) 'INTEGER)
+	  ((eq string-num-type 'FLOAT) 'FLOAT)
+	  ((eq string-num-type 'BIGNUM) 'INTEGER)
+	  ((eq string-num-type 'SINGLE-FLOAT) 'FLOAT)
+	  ((eq string-num-type 'DOUBLe-FLOAT) 'FLOAT)
+	  ((eq string-num-type 'SHORT-FLOAT) 'FLOAT)
+	  ((eq string-num-type 'LONG-FLOAT) 'FLOAT)
+	  ((eq string-num-type 'RATIO) 'RATIO)
+	  ((and (listp string-num-type)
+		(eq (car string-num-type) 'COMPLEX)) 'COMPLEX)
+	  (t 'STRING))))
+  
+(defun parse-number (string &optional (value-on-error *default-value-on-error*) (radix *radix*))
+  (let ((type-of-string (parse-type-from-string string)))
+    (cond ((eq type-of-string 'FLOAT)(parse-float string value-on-error))
+	  ((eq type-of-string 'INTEGER)(parse-int string value-on-error radix))
+	  ((eq type-of-string 'RATIO)(parse-ratio string value-on-error))
+	  ((eq type-of-string 'COMPLEX)(parse-complex string value-on-error))
+	  ((eq type-of-string 'STRING)(loop
+					 with new-string = (make-array (length string) :element-type 'character)
+					 for i from 0 to (length string)
+					 for char across string
+					 do (setf (svref new-string i) char)
+					 return new-string))
+	  (t value-on-error))))
 
 
-(defun make-float/frac (radix exp-marker whole-place frac-place exp-place)
-  (let* ((base (base-for-exponent-marker exp-marker))
-         (exp (expt base (number-value exp-place))))
-    (+ (* exp (number-value whole-place))
-       (/ (* exp (number-value frac-place))
-          (expt (float radix base)
-                (places frac-place))))))
-
-(defun make-float/whole (exp-marker whole-place exp-place)
-  (* (number-value whole-place)
-     (expt (base-for-exponent-marker exp-marker)
-           (number-value exp-place))))
-
-(defun parse-positive-real-number (string &key (start 0) (end nil) (radix 10)
-                                               ((:float-format *read-default-float-format*)
-                                                *read-default-float-format*))
-  "Given a string, and start, end, and radix parameters, produce a number according to the syntax definitions in the Common Lisp Hyperspec -- except for complex numbers and negative numbers."
-  (let ((end (or end (length string)))
-	(first-char (char string start)))
-    (flet ((invalid-number (reason)
-	     (error 'invalid-number
-		    :value (subseq string start end)
-		    :reason reason)))
-      (case first-char
-	((#\-)
-	 (invalid-number "Invalid usage of -"))
-	((#\/)
-	 (invalid-number "/ at beginning of number"))
-	((#\d #\D #\e #\E #\l #\L #\f #\F #\s #\S)
-	 (when (= radix 10)
-	   (invalid-number "Exponent-marker at beginning of number"))))
-      (let (/-pos .-pos exp-pos exp-marker)
-	(loop for index from start below end
-	      for char = (char string index)
-	      do (case char
-		   ((#\/)
-		    (if /-pos
-			(invalid-number "Multiple /'s in number")
-			(setf /-pos index)))
-		   ((#\.)
-		    (if .-pos
-			(invalid-number "Multiple .'s in number")
-			(setf .-pos index)))
-		   ((#\e #\E #\f #\F #\s #\S #\l #\L #\d #\D)
-		    (when (= radix 10)
-		      (when exp-pos
-			(invalid-number
-			 "Multiple exponent-markers in number"))
-		      (setf exp-pos index)
-		      (setf exp-marker (char-downcase char)))))
-	      when (eql index (1- end))
-	      do (case char
-		   ((#\/)
-		    (invalid-number "/ at end of number"))
-		   ((#\d #\D #\e #\E #\s #\S #\l #\L #\f #\F)
-		    (when (= radix 10)
-		      (invalid-number "Exponent-marker at end of number")))))
-	(cond ((and /-pos .-pos)
-	       (invalid-number "Both . and / cannot be present simultaneously"))
-	      ((and /-pos exp-pos)
-	       (invalid-number "Both an exponent-marker and / cannot be present simultaneously"))
-	      ((and .-pos exp-pos)
-               (if (< exp-pos .-pos)
-		   (invalid-number "Exponent-markers must occur after . in number")
-		   (if (/= radix 10)
-		       (invalid-number "Only decimal numbers can contain exponent-markers or decimal points")
-		       (multiple-value-bind (whole-place frac-place exp-place)
-                           (parse-integers string start end
-                                           (list .-pos exp-pos)
-                                           :radix radix)
-                         (make-float/frac radix exp-marker whole-place frac-place exp-place)))))
-	      (exp-pos
-	       (if (/= radix 10)
-		   (invalid-number "Only decimals can contain exponent-markers")
-		   (multiple-value-bind (whole-place exp-place)
-		       (parse-integers string start end
-				       (list exp-pos)
-				       :radix radix)
-		     (make-float/whole exp-marker whole-place exp-place))))
-	      (/-pos
-	       (multiple-value-bind (numerator denominator)
-		   (parse-integers string start end
-				   (list /-pos)
-				   :radix radix)
-		 (if (>= (number-value denominator) 0)
-		     (/ (number-value numerator)
-			(number-value denominator))
-		     (invalid-number "Misplaced - sign"))))
-	      (.-pos
-	       (if (/= radix 10)
-		   (invalid-number "Only decimal numbers can contain decimal points")
-		   (multiple-value-bind (whole-part frac-part)
-		       (parse-integers string start end
-				       (list .-pos)
-				       :radix 10)
-		     (cond
-                       ((minusp (places frac-part))
-                        (if (and (zerop (number-value whole-part))
-                                 (zerop (places whole-part)))
-                            (invalid-number "Only the . is present")
-                            (number-value whole-part)))
-                       ((>= (number-value frac-part) 0)
-                        (coerce (+ (number-value whole-part)
-                                   (/ (number-value frac-part)
-                                      (expt 10 (places frac-part))))
-                                *read-default-float-format*))
-                       (t
-                        (invalid-number "Misplaced - sign"))))))
-	      (t
-	       (values (parse-integer string
-				      :start start
-				      :end end
-				      :radix radix))))))))

@@ -6,5 +6,6 @@
   :license "Specify license here"
   :serial t
   :components ((:file "package")
-               (:file "neo-parse-number")))
+               (:file "neo-parse-number"))
+  :depends-on (#:parse-number))
 
