@@ -1,3 +1,5 @@
+(in-package :neo-parse-number)
+
 (defparameter *default-float-format* 'double-float)
 (defparameter *radix* 10)
 (defparameter *default-value-on-error* nil)
@@ -279,7 +281,6 @@
   (let ((string-num-type (type-of (handler-case (parse-number:parse-number string)
 				    (error () nil)))))
     (cond ((eql #\. (char string (- (length string) 1))) 'STRING)
-	  ((and (equal (subseq string 0 2 
 	  ((eq string-num-type 'BIT) 'INTEGER)
 	  ((eq string-num-type 'FIXNUM) 'INTEGER)
 	  ((and (listp string-num-type)
@@ -300,12 +301,12 @@
     (cond ((eq type-of-string 'FLOAT)(parse-float string value-on-error))
 	  ((eq type-of-string 'INTEGER)(parse-int string value-on-error radix))
 	  ((eq type-of-string 'RATIO)(parse-ratio string value-on-error))
-	  ((eq type-of-string 'COMPLEX)(parse-complex string value-on-error))
+	  ((eq type-of-string 'COMPLEX)(parse-complex-num string value-on-error))
 	  ((eq type-of-string 'STRING)(loop
 					 with new-string = (make-array (length string) :element-type 'character)
 					 for i from 0 to (length string)
 					 for char across string
-					 do (setf (svref new-string i) char)
+					 do (setf (aref new-string i) char)
 					 return new-string))
 	  (t value-on-error))))
 
