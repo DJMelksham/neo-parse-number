@@ -4,10 +4,46 @@
 (defparameter *radix* 10)
 (defparameter *default-value-on-error* nil)
 
-(defun parse-int (string &optional (value-on-error *default-value-on-error*) (radix *radix*))
-  "Parse an integer from string"
-  (handler-case (parse-integer string :radix radix)
-    (error () value-on-error)))
+(defun parse-int (string &optional (value-on-error *default-value-on-error*) (radix *radix*) (start 0) (end nil))
+  "Skips initial and trailing non-relevent characters and tries to parse an integer."
+
+  (handler-case 
+      (let ((minusp 0)
+	    (string-length 0)
+	    (i 0)
+	    (result 0)
+	    (char-buff #\0)
+	    (digit-buff 0))
+
+	(declare (optimize (speed 3))
+		 (fixnum i string-length minusp radix start)
+		 (integer result)
+		 (string string)
+		 (character char-buff)
+		 (t digit-buff)
+		 (dynamic-extent string-length minusp char-buff digit-buff))
+	
+	(setf string-length (if end
+				end
+				(length string))
+	      i start
+	      char-buff (char string i))
+
+	(cond ((char= char-buff #\-)(progn
+				      (setf minusp 1)
+				      (incf i)))
+	      ((char= char-buff #\+)(incf i))
+	      (t nil))
+	
+	(loop until (or (eql string-length i)
+			(not (setf digit-buff (digit-char-p (char string i) radix))))
+	   do (setf result (+ (* result radix) digit-buff))	   
+	   do (incf i))
+	
+	(if (eql minusp 1)
+	    (values (- result) (- i start))
+	    (values result (- i start))))
+    (error () (values value-on-error 0))))
 
 (defun parse-ratio (string &optional (value-on-error *default-value-on-error*))
   "Parse a string as a fraction."
@@ -20,39 +56,43 @@
 (defun parse-float (string &optional (value-on-error *default-value-on-error*))
   "Parse a string as a float if we deem it reasonably possible to do so."
   (handler-case 
-      (let ((string-length (length string)) ;length of string to terminate early if done
+      (let ((string-length 0) ;length of string to terminate early if done
+	    (length-marker 0) ;keeps track of where we are in the string while parsing
 	    (whole-part 0) ;stores the whole-number part of the float
 	    (whole-length 0) ;keeps track of how many digits are in the whole-number part
-	    (length-marker 0) ;keeps track of where we are in the string while parsing
 	    (fraction-part 0) ;keeps track of the fraction part of the float
 	    (fraction-length 0) ;keeps track of how many digits are in the fraction part
 	    (exponent-value 0) ;stores the exponent of the float
 	    (exponent-length 0) ;keeps track of how many digits are in the exponent
-	    (exponent-base 10.0d0) ;base
-	    (type-of-float 'DOUBLE-FLOAT)
-	    (coercion-coefficient 1.0d0))
-	
-	(declare (fixnum length-marker)
+	    (type-of-float 'DOUBLE-FLOAT))
+
+	(declare (optimize (speed 3)(safety 0))
+		 (fixnum string-length
+			 length-marker
+			 whole-part
+			 whole-length
+			 fraction-part
+			 fraction-length
+			 exponent-value
+			 exponent-length )
 		 (symbol type-of-float)
 		 (string string)
-		 (float exponent-base coercion-coefficient)
 		 (dynamic-extent string-length
 				 whole-part
 				 whole-length
-				 length-marker
 				 fraction-part
 				 fraction-length
 				 exponent-value
-				 exponent-length
-				 exponent-base
-				 coercion-coefficient))
+				 exponent-length))
+
+	(setf string-length (length string))
 
 	;; First, we attempt to parse an integer from the left-most part of the string
 	;; storing the value and the length of the parsed integer in the respective
 	;; values and incrementing our place in the full string
 	;; This constitutes the whole part of the floating point number
 
-	(multiple-value-setq (whole-part whole-length) (parse-integer string :junk-allowed t))
+	(multiple-value-setq (whole-part whole-length) (parse-int string nil 10))
 	(incf length-marker whole-length) ;;increment relative position by length of first int
 
 	;; If our previous operation didn't parse the entire string in one go,
@@ -64,7 +104,7 @@
 	(if (not (eql string-length length-marker))
 	    (progn
 	      (multiple-value-setq (fraction-part fraction-length)
-		(parse-integer (subseq string (incf length-marker)) :junk-allowed t))
+		(parse-int string nil 10 (incf length-marker)))
 	      (incf length-marker fraction-length)))
 
 	;; If our previous operation didn't parse the entire string yet,
@@ -77,34 +117,30 @@
 	
 	(if (not (eql length-marker string-length))
 	    (progn
-	      (setf coercion-coefficient (case (char string length-marker)
-					   ((#\d #\D) 1.0d0)
-					   ((#\e #\E) (coerce coercion-coefficient *default-float-format*))
-					   ((#\f #\F) 1.0f0)
-					   ((#\s #\S) 1.0s0)
-					   ((#\l #\L) 1.0l0)
-					   (t (coerce coercion-coefficient *default-float-format*)))
-		    
-		    type-of-float (type-of coercion-coefficient)
-		    
-		    exponent-base (coerce exponent-base (type-of coercion-coefficient)))
+	      (setf type-of-float (case (char string length-marker)
+				    ((#\d #\D) 'DOUBLE-FLOAT)
+				    ((#\e #\E) *default-float-format*)
+				    ((#\f #\F) 'FLOAT)
+				    ((#\s #\S) 'SHORT-FLOAT)
+				    ((#\l #\L) 'LONG-FLOAT)
+				    (t *default-float-format*)))
 	      
-	      (multiple-value-setq (exponent-value exponent-length) (parse-integer (subseq string (incf length-marker)) :junk-allowed t))
-	      (incf length-marker exponent-length)))
+	      (multiple-value-setq (exponent-value exponent-length)
+		(parse-int string nil 10 (incf length-marker)))))
 
 	;; Now we built up the final float
 	;; Note how we have to check whether it is a positive or negative float
 	;; because adding a positive fractional-part to negative whole-part
 	;; moves the representation in the wrong direction
 
-	(if (minusp whole-part)
-	    (* (- (coerce whole-part type-of-float)
-		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
-	       (expt exponent-base exponent-value))
-	    (* (+ (coerce whole-part type-of-float)
-		  (* (coerce fraction-part type-of-float) (/ coercion-coefficient (expt exponent-base fraction-length))))
-	       (expt exponent-base exponent-value))))
-    (error () value-on-error)))    
+	(coerce (* (+ (* whole-part (the fixnum (expt 10 (the unsigned-byte fraction-length))))
+		      (if (minusp whole-part)
+			  (- fraction-part)
+			  fraction-part))
+		   (expt 10 (the fixnum (- exponent-value fraction-length))))
+		type-of-float))
+    
+    (error () value-on-error)))  
 
 (defun parse-double! (string &optional (value-on-error *default-value-on-error*))
   "Parse a string as a DOUBLE-FLOAT if we deem it reasonably possible to do so."
