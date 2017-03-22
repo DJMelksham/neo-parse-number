@@ -18,7 +18,7 @@
   (char= char #\())
 
 (defun close-paren-p (char)
-  (char= char #\))
+  (char= char #\)))
 
 (defun parse-int (string &key (value-on-error nil) (radix 10) (start 0) (end nil))
   "Skips initial and trailing non-relevent characters and tries to parse an integer."
