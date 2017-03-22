@@ -2,6 +2,24 @@
 
 (defparameter *default-float-format* 'double-float)
 
+(declaim (inline white-space-p open-paren-p close-paren-p))
+
+(defun white-space-p (char)
+  (declare (optimize (speed 3)(safety 0))
+	   (character char))
+  (if (or (char= char #\Space)
+	  (char= char #\Tab)
+	  (char= char #\Return)
+	  (char= char #\Linefeed))
+      T
+      NIL))
+
+(defun open-paren-p (char)
+  (char= char #\())
+
+(defun close-paren-p (char)
+  (char= char #\))
+
 (defun parse-int (string &key (value-on-error nil) (radix 10) (start 0) (end nil))
   "Skips initial and trailing non-relevent characters and tries to parse an integer."
 
@@ -145,7 +163,11 @@
     (error () value-on-error))) 
 
 (defun parse-complex-num (string &key (value-on-error nil)(start 0)(end nil))
-  (handler-case (parse-number:parse-number string :start start :end end)
+  (handler-case (parse-number:parse-number
+		 string
+		 :start start
+		 :end end
+		 :float-format *default-float-format*)
     (error () value-on-error)))
 
 (defun parse-string (string &key (value-on-error nil)(start 0)(end nil))
