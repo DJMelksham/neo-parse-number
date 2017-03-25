@@ -85,9 +85,7 @@
 	(declare (optimize (speed 3))
 		 (fixnum string-length
 			 length-marker
-			 whole-part
 			 whole-length
-			 fraction-part
 			 fraction-length
 			 exponent-value
 			 exponent-length )
@@ -153,11 +151,11 @@
 	;; because adding a positive fractional-part to negative whole-part
 	;; moves the representation in the wrong direction
 
-	(coerce (* (+ (* whole-part (the fixnum (expt 10 (the unsigned-byte fraction-length))))
+	(coerce (* (+ (* whole-part (expt 10 fraction-length))
 		      (if (minusp whole-part)
 			  (- fraction-part)
 			  fraction-part))
-		   (expt 10 (the fixnum (- exponent-value fraction-length))))
+		   (expt 10 (- exponent-value fraction-length)))
 		type-of-float))
     
     (error () value-on-error))) 

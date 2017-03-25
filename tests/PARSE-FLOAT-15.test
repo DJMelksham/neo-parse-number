@@ -1,0 +1,14 @@
+
+((TESTY::NAME . "PARSE-FLOAT-15") (TESTY::FILE-ON-DISK . "PARSE-FLOAT-15.test")
+ (TESTY::DESCRIPTION . "try to parse a very big integer as a float")
+ (TESTY::EXPECTATION . "EQL") (TESTY::TAGS "PARSE-FLOAT")
+ (TESTY::SOURCE LAMBDA NIL
+                (TESTY:TEST-EQL :NAME "parse-float-14" :DESCRIPTION
+                                "try to parse a very big integer as a float"
+                                :TAGS "parse-float"))
+ (TESTY::RE-EVALUATE) (TESTY::EXPECTED-VALUE) (TESTY::RUN-VALUE)
+ (TESTY::RUN-TIME . 0.0) (TESTY::RESULT . T)
+ (TESTY::BEFORE-FUNCTION-SOURCE LAMBDA NIL NIL)
+ (TESTY::BEFORE-FUNCTION-RUN-STATUS . T)
+ (TESTY::AFTER-FUNCTION-SOURCE LAMBDA NIL NIL)
+ (TESTY::AFTER-FUNCTION-RUN-STATUS . T)) 
